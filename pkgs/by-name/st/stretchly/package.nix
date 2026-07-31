@@ -10,11 +10,11 @@
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "stretchly";
-  version = "1.19.0";
+  version = "1.22.0";
 
   src = fetchurl {
     url = "https://github.com/hovancik/stretchly/releases/download/v${finalAttrs.version}/stretchly-${finalAttrs.version}.tar.xz";
-    hash = "sha256-llcKbzlqGMxwrqH1qvQo4fHxO0C1itVZ5wlkwL1IOOU=";
+    hash = "sha256-ZLw2XISbHMhIS57uOFUKcXcntm8rb41lhrTWgWgGfJ4=";
   };
 
   icon = fetchurl {
@@ -22,7 +22,10 @@ stdenv.mkDerivation (finalAttrs: {
     hash = "sha256-tO0cNKopG/recQus7KDUTyGpApvR5/tpmF5C4V14DnI=";
   };
 
-  nativeBuildInputs = [ makeWrapper ];
+  nativeBuildInputs = [
+    makeWrapper
+    stdenv.cc.cc.lib
+  ];
 
   installPhase = ''
     runHook preInstall
@@ -34,6 +37,7 @@ stdenv.mkDerivation (finalAttrs: {
     ln -s ${finalAttrs.desktopItem}/share/applications/* $out/share/applications/
 
     makeWrapper ${electron}/bin/electron $out/bin/stretchly \
+      --prefix LD_LIBRARY_PATH:"${lib.makeLibraryPath [ stdenv.cc.cc.lib ]}" \
       --add-flags $out/share/stretchly/app.asar
 
     runHook postInstall
