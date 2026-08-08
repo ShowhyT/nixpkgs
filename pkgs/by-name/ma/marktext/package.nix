@@ -2,11 +2,10 @@
   stdenv,
   fetchFromGitHub,
   lib,
-  fetchYarnDeps,
-  yarn,
-  fixup-yarn-lock,
+  fetchPnpmDeps,
+  pnpm_10,
+  pnpmConfigHook,
   nodejs,
-  electron,
   python3,
   node-gyp,
   libx11,
@@ -14,166 +13,147 @@
   libxkbfile,
   fontconfig,
   node-gyp-build,
-  ripgrep,
   pkg-config,
   libsecret,
-  yarnBuildHook,
-  makeShellWrapper,
-  unstableGitUpdater,
+  makeWrapper,
+  electron,
+  nix-update-script,
   xcbuild,
   libtool,
 }:
+let
+  dist_path = {
+    x86_64-linux = "dist/linux-unpacked";
+    aarch64-linux = "dist/linux-arm64-unpacked";
+    aarch64-darwin = "dist/mac-arm64-unpacked";
+  };
 
+  builded_dir = dist_path.${stdenv.hostPlatform.system};
+in
 stdenv.mkDerivation (finalAttrs: {
   pname = "marktext";
-  version = "0.17.0-unstable-2025-11-19";
+  version = "0.19.1";
 
   src = fetchFromGitHub {
     owner = "marktext";
     repo = "marktext";
-    rev = "aa71e33e07845419533d767ad0d260a7c267cec7";
-    hash = "sha256-c/MxYGFFCfC5KcvtBYuxSqeZ4WuAq5zPuBfYqXczicU=";
-    postFetch = ''
-      cd $out
-      patch -p1 < ${./0001-update-electron.patch}
-    ''; # Need for offlineCache
+    tag = "v${finalAttrs.version}";
+    hash = "sha256-i1CjwRndcDUNpoMUPZ9U2TI/OsSX/WH8zXgEMHy338k=";
   };
 
-  offlineCache = fetchYarnDeps {
-    yarnLock = "${finalAttrs.src}/yarn.lock";
-    hash = "sha256-mr79FV/LHkoY3vX9B5yv95IQIJQ9akwfslKndKYmwCo=";
+  pnpmDeps = fetchPnpmDeps {
+    pname = "marktext-monorepo";
+    inherit (finalAttrs) version src;
+    fetcherVersion = 4;
+    hash = "sha256-PNFWviNG77Bfs0R08jCUDVQ/1O/1Q82iLWK+2tYLHg0=";
+    pnpm = pnpm_10;
+    pnpmInstallFlags = [ "--no-frozen-lockfile" ];
   };
 
   nativeBuildInputs = [
-    yarn
-    fixup-yarn-lock
-    makeShellWrapper
-    yarnBuildHook
+    pnpmConfigHook
+    makeWrapper
     (python3.withPackages (ps: with ps; [ packaging ]))
     pkg-config
+    electron
     nodejs
     node-gyp
     node-gyp-build
   ]
   ++ lib.optionals stdenv.hostPlatform.isDarwin [
     xcbuild
-    libtool
   ];
 
   buildInputs = [
+    fontconfig
+    xorgproto
     libsecret
     libx11
     libxkbfile
-    fontconfig
-    xorgproto
-  ];
-
-  postPatch = ''
-    substituteInPlace src/common/filesystem/paths.js \
-      --replace-fail "process.resourcesPath" "'$out/opt/marktext/resources'"
-
-    substituteInPlace src/main/cli/index.js \
-      --replace-fail "process.argv.slice(1)" "process.argv.slice(2)"
-  '';
-
-  configurePhase = ''
-    runHook preConfigure
-
-    export HOME=$(mktemp -d)
-    yarn config --offline set yarn-offline-mirror ${finalAttrs.offlineCache}
-    fixup-yarn-lock yarn.lock
-
-    # set nodedir to prevent node-gyp from downloading headers
-    # taken from https://nixos.org/manual/nixpkgs/stable/#javascript-tool-specific
-    mkdir -p $HOME/.node-gyp/${nodejs.version}
-    echo 9 > $HOME/.node-gyp/${nodejs.version}/installVersion
-    ln -sfv ${nodejs}/include $HOME/.node-gyp/${nodejs.version}
-    export npm_config_nodedir=${nodejs}
-
-    yarn --offline --frozen-lockfile install --ignore-scripts --no-progress --non-interactive
-
-    patchShebangs node_modules
-
-    substituteInPlace node_modules/node-gyp/gyp/pylib/gyp/input.py \
-      --replace-fail "from distutils.version import StrictVersion" "from packaging.version import Version as StrictVersion"
-
-    ./node_modules/.bin/electron-rebuild -f
-
-    substituteInPlace package.json \
-      --replace-fail "electron-rebuild -f" "echo 0" \
-      --replace-fail "&& yarn run lint:fix" ""
-
-    mkdir -p node_modules/vscode-ripgrep/bin
-
-    yarn --offline --frozen-lockfile install --no-progress
-    patchShebangs node_modules
-
-    substituteInPlace node_modules/node-gyp/gyp/pylib/gyp/input.py \
-      --replace-fail "from distutils.version import StrictVersion" "from packaging.version import Version as StrictVersion"
-
-    sed -i -e 's|path.join(.*);|"${lib.getExe ripgrep}";|' \
-      node_modules/vscode-ripgrep/lib/index.js
-
-    runHook postConfigure
-  '';
-
-  yarnBuildScript = "electron-builder";
-
-  yarnBuildFlags = [
-    "--dir"
-    "-c.electronDist=${electron.dist}"
-    "-c.electronVersion=${electron.version}"
+    pnpm_10
   ];
 
   env = {
     ELECTRON_SKIP_BINARY_DOWNLOAD = "1";
-    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+    DIST_DIR =
+      if stdenv.hostPlatform.isAarch64 then "dist/linux-arm64-unpacked" else "dist/linux-unpacked";
   };
 
-  preBuild = ''
-    node .electron-vue/build.js
-  ''; # From package.json
+  # Patch i18n.ts before building
+  postPatch = ''
+    # Fix folders location
+    substituteInPlace packages/desktop/src/common/i18n.ts \
+      --replace-fail \
+        "process.resourcesPath, 'static', 'locales'" \
+        "__dirname, '..', '..', 'static', 'locales'"
+  '';
+
+  buildPhase = ''
+    runHook preBuild
+
+    # Need for electron-rebuild
+    export npm_config_nodedir=${nodejs}
+
+    # Generate minified locale files
+    pnpm run minify-locales
+
+    pnpm run build
+
+    # Rebuild native modules
+    pnpm exec electron-rebuild -f --module-dir packages/desktop
+
+    pnpm exec electron-builder \
+      --dir \
+      --projectDir packages/desktop \
+      --config electron-builder.yml \
+      -c.electronDist=${electron.dist} \
+      -c.electronVersion=${electron.version}
+
+    # Inject static folder into the asar
+    pnpm exec asar extract $DIST_DIR/resources/app.asar app-tmp
+    cp -a packages/desktop/static app-tmp/static
+    pnpm exec asar pack app-tmp $DIST_DIR/resources/app.asar
+    rm -rf app-tmp
+
+    runHook postBuild
+  '';
 
   installPhase = ''
     runHook preInstall
 
-    mkdir -p $out/opt/marktext $out/bin
+    mkdir -p "$out/lib/marktext" "$out/bin"
 
-    install -Dm644 resources/linux/marktext.desktop $out/share/applications/marktext.desktop
+    install -Dm644 packages/desktop/build/linux/marktext.desktop \
+      "$out/share/applications/marktext.desktop"
 
-    pushd resources/icons/
+    # Copy the built app
+    cp -r ${builded_dir}/. "$out/lib/marktext/"
 
-    find -maxdepth 1 -mindepth 1 -type d -exec install -DT {}/marktext.png $out/share/icons/hicolor/{}/apps/marktext.png \;
-
-    find -maxdepth 1 -mindepth 1 -type d -exec install -DT {}/md.png $out/share/icons/hicolor/{}/apps/md.png \;
-
-    popd
-
-    cp -r build/*-unpacked/{locales,resources{,.pak}} $out/opt/marktext
-
-    makeWrapper ${lib.getExe electron} $out/bin/marktext \
-      --add-flags $out/opt/marktext/resources/app.asar \
+    makeWrapper ${lib.getExe electron} "$out/bin/marktext" \
+      --add-flags "$out/lib/marktext/resources/app.asar" \
       --add-flags "\''${NIXOS_OZONE_WL:+\''${WAYLAND_DISPLAY:+--ozone-platform-hint=auto --enable-features=WaylandWindowDecorations}}"
 
+    # Add file icons
+    for size in 16 24 32 48 64 128 256 512; do
+      iconFile="packages/desktop/build/icons/''${size}x''${size}/marktext.png"
+      if [ -f "$iconFile" ]; then
+        install -Dm644 "$iconFile" \
+          "$out/share/icons/hicolor/''${size}x''${size}/apps/marktext.png"
+      fi
+    done
     runHook postInstall
   '';
 
-  passthru.updateScript = unstableGitUpdater {
-    tagPrefix = "v";
-    branch = "develop";
-  };
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Simple and elegant markdown editor, available for Linux, macOS and Windows";
-    homepage = "https://www.marktext.cc";
+    homepage = "https://www.marktext.me";
     license = lib.licenses.mit;
     maintainers = with lib.maintainers; [
       nh2
       eduarrrd
       bot-wxt1221
-    ];
-    badPlatforms = [
-      "aarch64-darwin"
     ];
     platforms = lib.platforms.unix;
     mainProgram = "marktext";
