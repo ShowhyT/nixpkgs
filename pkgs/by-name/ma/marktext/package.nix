@@ -19,7 +19,7 @@
   electron,
   nix-update-script,
   xcbuild,
-  libtool,
+  cctools,
 }:
 let
   dist_path = {
@@ -62,6 +62,7 @@ stdenv.mkDerivation (finalAttrs: {
   ]
   ++ lib.optionals stdenv.hostPlatform.isDarwin [
     xcbuild
+    cctools
   ];
 
   buildInputs = [
