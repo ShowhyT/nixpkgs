@@ -5,26 +5,28 @@
   rustPlatform,
 }:
 
-buildPythonPackage rec {
+buildPythonPackage (finalAttrs: {
   pname = "textual-speedups";
-  version = "0.2.1";
+  version = "0.2.1-unstable-2026-04-08";
   pyproject = true;
 
+  # TODO: on next release, use tag, instead of rev
   src = fetchFromGitHub {
     owner = "willmcgugan";
     repo = "textual-speedups";
-    tag = "v${version}";
-    hash = "sha256-zsDA8qPpeiOlmL18p4pItEgXQjgrQEBVRJazrGJT9Bw=";
+    rev = "5f01ad052564ca1ac14ecf33a69c6d39be17a8af";
+    hash = "sha256-jefe54C41fxocRtR1JickaBV2Dja5pWyHMXkr9PdcJM=";
   };
 
   cargoDeps = rustPlatform.fetchCargoVendor {
-    inherit pname version src;
+    inherit (finalAttrs) pname src;
+    version = "0.2.1";
     hash = "sha256-Bz4ocEziOlOX4z5F9EDry99YofeGyxL/6OTIf/WEgK4=";
   };
 
-  nativeBuildInputs = [
-    rustPlatform.cargoSetupHook
-    rustPlatform.maturinBuildHook
+  nativeBuildInputs = with rustPlatform; [
+    cargoSetupHook
+    maturinBuildHook
   ];
 
   pythonImportsCheck = [ "textual_speedups" ];
@@ -35,9 +37,7 @@ buildPythonPackage rec {
   meta = {
     description = "Optional Rust speedups for Textual";
     homepage = "https://github.com/willmcgugan/textual-speedups";
-    # No license (yet?)
-    # https://github.com/willmcgugan/textual-speedups/issues/2
-    license = lib.licenses.unfree;
+    license = lib.licenses.mit;
     maintainers = with lib.maintainers; [ GaetanLepage ];
   };
-}
+})
